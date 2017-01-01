@@ -4,6 +4,9 @@ use FindBin qw($Bin);
 use strict;
 use Encode;
 
+use threads;
+use Thread::Queue;
+
 binmode(STDIN, ":utf8");
 binmode(STDOUT, ":utf8");
 binmode(STDERR, ":utf8");
@@ -13,30 +16,52 @@ my $dir = "txt";
 my $outdir = "aligned";
 my $preprocessor = "$Bin/tools/split-sentences.perl -q";
 
-my ($l1,$l2) = @ARGV;
+my ($l1,$l2,$num_threads) = @ARGV;
 die unless -e "$dir/$l1";
 die unless -e "$dir/$l2";
+
+$num_threads=1 unless defined $num_threads;
+my $work_q = Thread::Queue->new();
 
 `mkdir -p $outdir/$l1-$l2/$l1`;
 `mkdir -p $outdir/$l1-$l2/$l2`;
 
-my ($dayfile,$s1); # globals for reporting reasons
+my @worker_threads = map {
+    threads->create(sub {
+	while (my $item = $work_q->dequeue()) {
+	    return unless defined $item;
+	    &align($item);
+	}});
+} 1..$num_threads;
+
+
 open(LS,"ls $dir/$l1|");
-while($dayfile = <LS>) {
+while(my $dayfile = <LS>) {
   chop($dayfile);
   if (! -e "$dir/$l2/$dayfile") {
     print "$dayfile only for $l1, not $l2, skipping\n";
     next;
   }
-  &align();
+  $work_q->enqueue($dayfile);
 }
 
+# Send end-of-work signal to threads
+$work_q->enqueue(undef) for 1..$num_threads;
+
+# Wait for threads to complete
+$_->join() for @worker_threads;
+
+
+
 sub align {
+  my ($dayfile) = shift;
+
   my @TXT1native= `$preprocessor -l $l1 < $dir/$l1/$dayfile`;
   my @TXT2native = `$preprocessor -l $l2 < $dir/$l2/$dayfile`;
   my @TXT1;
   my @TXT2;
   
+  my ($s1);
   
   #change perl encoding
   foreach my $line (@TXT1native) {
@@ -88,14 +113,14 @@ foreach my $line (@TXT2native) {
 	  print OUT2 $TXT2[$i2++];
 	}
 	elsif ($s1 < $s2) {
-	  $i1 = &skip(\@TXT1,$i1+1,'^<SPEAKER ID=\"?\d+\"?');
+	  $i1 = &skip(\@TXT1,$i1+1,'^<SPEAKER ID=\"?\d+\"?',$dayfile);
 	}
 	else {
-	  $i2 = &skip(\@TXT2,$i2+1,'^<SPEAKER ID=\"?\d+\"?');
+	  $i2 = &skip(\@TXT2,$i2+1,'^<SPEAKER ID=\"?\d+\"?',$dayfile);
 	}
       }
       else {
-	$i2 = &skip(\@TXT2,$i2,'^<SPEAKER ID=\"?\d+\"?');
+	$i2 = &skip(\@TXT2,$i2,'^<SPEAKER ID=\"?\d+\"?',$dayfile);
       }
     }  
     else {
@@ -103,7 +128,11 @@ foreach my $line (@TXT2native) {
       my @P1 = &extract_paragraph(\@TXT1,\$i1);
       my @P2 = &extract_paragraph(\@TXT2,\$i2);
       if (scalar(@P1) != scalar(@P2)) {
-	print "$dayfile (speaker $s1) different number of paragraphs ".scalar(@P1)." != ".scalar(@P2)."\n";
+	if (defined $s1) {
+	  print "$dayfile (speaker $s1) different number of paragraphs ".scalar(@P1)." != ".scalar(@P2)."\n";
+	} else {
+	  print "$dayfile (no speaker) different number of paragraphs ".scalar(@P1)." != ".scalar(@P2)."\n";
+	}
       }
       else {
 	  for(my $p=0;$p<scalar(@P1);$p++) {
@@ -116,7 +145,7 @@ foreach my $line (@TXT2native) {
 close(LS);
 
 sub skip {
-  my ($TXT,$i,$pattern) = @_;
+  my ($TXT,$i,$pattern,$dayfile) = @_;
   my $i_old = $i;
   while($i < scalar(@{$TXT})
 	&& $$TXT[$i] !~ /$pattern/) { 
