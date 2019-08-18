@@ -96,6 +96,11 @@ sub tokenize {
 		$text =~ s/([^\p{IsAlpha}])[']([\p{IsAlpha}])/$1 ' $2/g;
 		$text =~ s/([\p{IsAlpha}])[']([^\p{IsAlpha}])/$1 ' $2/g;
 		$text =~ s/([\p{IsAlpha}])[']([\p{IsAlpha}])/$1' $2/g;
+	} elsif ($language eq "ess") {
+	        # Replace within-word apostrophe with U+02BC MODIFIER LETTER APOSTROPHE
+	        $text =~ s/([\p{IsAlpha}])[']([\p{IsAlpha}])/$1\x{02BC}$2/g;
+	        # Tokenize all other instances of apostrophe
+		$text =~ s/\'/ \' /g;
 	} else {
 		$text =~ s/\'/ \' /g;
 	}
